@@ -68,7 +68,6 @@ def test_summary_rejects_mismatched_target_names():
         summarize_annual_multibagger_labels(result)
 
 
-
 @pytest.mark.parametrize(
     "corruption,expected",
     [
@@ -102,6 +101,7 @@ def test_summary_refuses_incomparable_target_cohorts(corruption, expected):
 
     with pytest.raises(ValueError, match=expected):
         summarize_annual_multibagger_labels(rows)
+
 
 def runner_input(tmp_path, monkeypatch):
     monkeypatch.setitem(settings.RESEARCH_CONFIG, "dev_start", "2024-01-01")
