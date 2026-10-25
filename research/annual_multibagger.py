@@ -249,10 +249,23 @@ def review_annual_census(db, folder):
         raise ValueError("تقویم یا مخرج فرصت‌ها عوض شد")
     if str(prices.date.max()) != protocol["observed_through"] or _sha256(folder / "cohort.parquet") != protocol["cohort_sha256"]:
         raise ValueError("زمان مشاهده یا جامعه محفوظ عوض شد")
-    pd.testing.assert_frame_equal(cohort.reset_index(drop=True), pd.read_parquet(folder / "cohort.parquet").reset_index(drop=True))
+    # Read archived Parquet with the same hash-bound, date-first holdout guard as raw prices.
+    # A direct pd.read_parquet() would load numeric values from a rehashed sealed row
+    # before the replay comparison could detect that the archive had been poisoned.
+    archived_cohort = read_development_parquet(
+        _relative_file(folder, "cohort.parquet"),
+        result["artifacts_sha256"]["cohort.parquet"],
+        protocol["holdout_start"],
+    )
+    pd.testing.assert_frame_equal(cohort.reset_index(drop=True), archived_cohort.reset_index(drop=True))
 
     replay = compute_annual_multibagger_labels(prices, cohort, calendar, observed_through=protocol["observed_through"])
-    pd.testing.assert_frame_equal(replay, pd.read_parquet(folder / "outcomes.parquet"))
+    archived_outcomes = read_development_parquet(
+        _relative_file(folder, "outcomes.parquet"),
+        result["artifacts_sha256"]["outcomes.parquet"],
+        protocol["holdout_start"],
+    )
+    pd.testing.assert_frame_equal(replay, archived_outcomes)
     summary = summarize_annual_multibagger_labels(replay)
     if _json_safe(summary) != result["summary"]:
         raise ValueError("خلاصه اهداف چندبرابری با بازحساب برابر نیست")
