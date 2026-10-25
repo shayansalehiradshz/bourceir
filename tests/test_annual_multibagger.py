@@ -1,4 +1,6 @@
+import hashlib
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -178,3 +180,38 @@ def test_holdout_input_is_refused_before_registration(db, tmp_path, monkeypatch)
         run_annual_census(
             db, prices_path=path, prices_sha256=_sha256(path), root=tmp_path / "runs", min_symbols=1
         )
+
+
+def test_review_refuses_rehashed_holdout_outcome_before_reading_values(db, tmp_path, monkeypatch):
+    """Reject a poisoned output date before opening its future-derived numeric columns."""
+    path = runner_input(tmp_path, monkeypatch)
+    result = run_annual_census(
+        db, prices_path=path, prices_sha256=_sha256(path), root=tmp_path / "runs", min_symbols=1
+    )
+    folder = tmp_path / "runs" / result["experiment_id"]
+    target = folder / "outcomes.parquet"
+
+    original_read = pd.read_parquet
+    outcomes = original_read(target)
+    outcomes.loc[0, "date"] = settings.RESEARCH_CONFIG["holdout_start"]
+    outcomes.to_parquet(target, index=False)
+    sealed_digest = _sha256(target)
+    # Rehash the poisoned artifact: the inventory alone is insufficient protection.
+    result["artifacts_sha256"]["outcomes.parquet"] = sealed_digest
+    (folder / "result.json").write_text(json.dumps(result), encoding="utf-8")
+
+    inspected_columns = []
+
+    def guarded_read(source, *args, **kwargs):
+        if isinstance(source, (str, Path)) and Path(source).resolve() == target.resolve():
+            pytest.fail("unprotected path read exposed sealed outcomes before date validation")
+        if hasattr(source, "getvalue") and hashlib.sha256(source.getvalue()).hexdigest() == sealed_digest:
+            inspected_columns.append(kwargs.get("columns"))
+            if kwargs.get("columns") != ["date"]:
+                pytest.fail("sealed numeric outcomes were read before the date-only check")
+        return original_read(source, *args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_parquet", guarded_read)
+    with pytest.raises(ValueError, match="مهروموم"):
+        review_annual_census(db, folder)
+    assert inspected_columns == [["date"]]
