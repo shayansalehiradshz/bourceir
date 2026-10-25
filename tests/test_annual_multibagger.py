@@ -1,0 +1,145 @@
+import json
+
+import pandas as pd
+import pytest
+
+from config import settings
+from research.annual_multibagger import (
+    HORIZON_SESSIONS,
+    compute_annual_multibagger_labels,
+    review_annual_census,
+    run_annual_census,
+    summarize_annual_multibagger_labels,
+)
+from research.run import _sha256
+
+
+def synthetic_prices(days, final_close=200.0):
+    closes = [100.0] * len(days)
+    closes[-1] = final_close
+    return pd.DataFrame(
+        dict(symbol="آزمون", date=days, close_final_raw=closes, ref_price_raw=[100.0] * len(days), volume=100)
+    )
+
+
+def test_annual_labels_distinguish_double_and_triple_targets():
+    days = pd.date_range("2024-01-01", periods=HORIZON_SESSIONS + 1).strftime("%Y-%m-%d").tolist()
+    prices = synthetic_prices(days, final_close=200.0)
+    decisions = prices.iloc[:1][["symbol", "date"]]
+
+    result = compute_annual_multibagger_labels(
+        prices, decisions, days, observed_through=days[-1]
+    ).set_index("target")
+
+    assert result.loc["double", "status"] == "hit"
+    assert result.loc["double", "first_hit_session"] == HORIZON_SESSIONS
+    assert result.loc["double", "endpoint_multiple"] == pytest.approx(2.0)
+    assert result.loc["triple", "status"] == "complete_no_hit"
+    assert result.loc["triple", "outcome"] == False
+    assert result.loc["triple", "endpoint_multiple"] == pytest.approx(2.0)
+
+
+def test_missing_session_remains_unknown_for_both_targets():
+    days = pd.date_range("2024-01-01", periods=HORIZON_SESSIONS + 1).strftime("%Y-%m-%d").tolist()
+    prices = synthetic_prices(days, final_close=300.0).drop(index=100)
+    decisions = pd.DataFrame([{"symbol": "آزمون", "date": days[0]}])
+
+    result = compute_annual_multibagger_labels(
+        prices, decisions, days, observed_through=days[-1]
+    )
+    assert result["status"].tolist() == ["missing_observation", "missing_observation"]
+    assert result["outcome"].isna().all()
+
+    summary = summarize_annual_multibagger_labels(result)
+    assert [item["target"] for item in summary] == ["double", "triple"]
+    assert all(item["opportunities"] == 1 and item["unknown"] == 1 for item in summary)
+    assert all(item["observed_hit_fraction_lower"] == 0 for item in summary)
+    assert all(item["possible_hit_fraction_upper"] == 1 for item in summary)
+
+
+def test_summary_rejects_mismatched_target_names():
+    days = pd.date_range("2024-01-01", periods=HORIZON_SESSIONS + 1).strftime("%Y-%m-%d").tolist()
+    prices = synthetic_prices(days)
+    result = compute_annual_multibagger_labels(
+        prices, prices.iloc[:1][["symbol", "date"]], days, observed_through=days[-1]
+    )
+    result.loc[result["target"].eq("triple"), "target"] = "double"
+    with pytest.raises(ValueError, match="نام هدف"):
+        summarize_annual_multibagger_labels(result)
+
+
+def runner_input(tmp_path, monkeypatch):
+    monkeypatch.setitem(settings.RESEARCH_CONFIG, "dev_start", "2024-01-01")
+    days = pd.date_range("2024-01-01", periods=65).strftime("%Y-%m-%d").tolist()
+    values = [100.0, *[200.0] * 64]
+    prices = pd.DataFrame(
+        dict(symbol="آزمون", date=days, close_final_raw=values,
+             ref_price_raw=[100.0, *values[:-1]], volume=100)
+    )
+    path = tmp_path / "input.parquet"
+    prices.to_parquet(path, index=False)
+    return path
+
+
+def test_study_registers_before_labels_and_reconstructs_from_archived_bytes(db, tmp_path, monkeypatch):
+    path = runner_input(tmp_path, monkeypatch)
+    result = run_annual_census(
+        db, prices_path=path, prices_sha256=_sha256(path), root=tmp_path / "runs", min_symbols=1
+    )
+    folder = tmp_path / "runs" / result["experiment_id"]
+    review = review_annual_census(db, folder)
+
+    assert review["outcomes_recomputed"] == 8
+    assert review["cohort_reconstructed"] == 4
+    assert review["current_code_matches_capture"]
+    assert not review["accepted_for_signals"] and not review["profitability_proven"]
+    assert result["protocol"]["strategy_trials_added"] == 0
+    assert [item["target"] for item in result["summary"]] == ["double", "triple"]
+    assert [item["opportunities"] for item in result["summary"]] == [4, 4]
+    assert [item["unknown"] for item in result["summary"]] == [3, 4]
+
+
+def test_registration_failure_stops_before_outcome_computation(db, tmp_path, monkeypatch):
+    path = runner_input(tmp_path, monkeypatch)
+    monkeypatch.setattr(db, "log_experiment", lambda **kwargs: None)
+
+    import research.annual_multibagger as module
+
+    monkeypatch.setattr(
+        module, "compute_annual_multibagger_labels",
+        lambda *args, **kwargs: pytest.fail("labels must not run before protocol registration"),
+    )
+    with pytest.raises(RuntimeError, match="ثبت مطالعه"):
+        run_annual_census(
+            db, prices_path=path, prices_sha256=_sha256(path), root=tmp_path / "runs", min_symbols=1
+        )
+    assert not list((tmp_path / "runs").rglob("outcomes.parquet"))
+
+
+def test_tampered_outcomes_are_rejected_even_after_rehash(db, tmp_path, monkeypatch):
+    path = runner_input(tmp_path, monkeypatch)
+    result = run_annual_census(
+        db, prices_path=path, prices_sha256=_sha256(path), root=tmp_path / "runs", min_symbols=1
+    )
+    folder = tmp_path / "runs" / result["experiment_id"]
+    outcomes = pd.read_parquet(folder / "outcomes.parquet")
+    outcomes.loc[0, "first_hit_session"] = 8
+    outcomes.to_parquet(folder / "outcomes.parquet", index=False)
+    result["artifacts_sha256"]["outcomes.parquet"] = _sha256(folder / "outcomes.parquet")
+    (folder / "result.json").write_text(json.dumps(result), encoding="utf-8")
+
+    with pytest.raises(AssertionError):
+        review_annual_census(db, folder)
+
+
+def test_holdout_input_is_refused_before_registration(db, tmp_path, monkeypatch):
+    path = runner_input(tmp_path, monkeypatch)
+    prices = pd.read_parquet(path)
+    prices.loc[len(prices) - 1, "date"] = settings.RESEARCH_CONFIG["holdout_start"]
+    prices.to_parquet(path, index=False)
+    monkeypatch.setattr(db, "log_experiment", lambda **kwargs: pytest.fail("sealed data must fail before registration"))
+
+    with pytest.raises(ValueError):
+        run_annual_census(
+            db, prices_path=path, prices_sha256=_sha256(path), root=tmp_path / "runs", min_symbols=1
+        )
