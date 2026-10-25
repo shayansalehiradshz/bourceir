@@ -12,7 +12,7 @@ from config import settings
 from core.timeutils import now_tehran_iso
 from ops.research_review import _load_json, _relative_file, _verify_inventory, read_development_parquet
 from research.labels import CALENDAR_MIN_SYMBOLS, market_calendar
-from research.rare_events import compute_rare_events, summarize_rare_events
+from research.rare_events import _panel, compute_rare_events, summarize_rare_events
 from research.run import _json_safe, _sha256, archive_research_code, research_code_fingerprint
 
 VERSION = "annual-multibagger-cohort-v1"
@@ -27,6 +27,11 @@ def _write(path, value):
 
 def _inputs(path, digest, cutoff, start, min_symbols, stride):
     prices = read_development_parquet(path, digest, cutoff)
+    # Validate source keys before any protocol or archived cohort is registered. A
+    # duplicated normalized symbol/date or missing raw column must not leave behind
+    # a registered experiment whose outcomes can never be reconstructed.
+    # Do not filter invalid numeric bars here: their event paths remain unknown.
+    _panel(prices, {"symbol", "date", "close_final_raw", "ref_price_raw", "volume"})
     if prices.empty or prices.date.min() > start:
         raise ValueError("سابقه خام باید شروع دوره توسعه را پوشش دهد")
     calendar = market_calendar(prices, min_symbols=min_symbols).tolist()
