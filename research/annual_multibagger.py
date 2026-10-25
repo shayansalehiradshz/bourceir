@@ -76,12 +76,27 @@ def summarize_annual_multibagger_labels(outcomes):
     summaries = []
     for threshold in TARGETS:
         group = outcomes.loc[outcomes["threshold"].eq(threshold)].copy()
-        if group.empty or set(group["target"].dropna().astype(str).unique()) != {TARGET_NAMES[threshold]}:
+        if group.empty or group["target"].isna().any() or set(group["target"].astype(str).unique()) != {TARGET_NAMES[threshold]}:
             raise ValueError("نام هدف با آستانه عددی سازگار نیست")
         group = group.drop(columns=["target"])
         for summary in summarize_rare_events(group):
             summary["target"] = TARGET_NAMES[threshold]
             summaries.append(summary)
+    # Both targets must share the same decision cohort; comparing different denominators
+    # creates spurious multibagger frequencies even when each target is valid by itself.
+    doubles = outcomes.loc[outcomes["threshold"].eq(2.0)].set_index(["symbol", "date"]).sort_index()
+    triples = outcomes.loc[outcomes["threshold"].eq(3.0)].set_index(["symbol", "date"]).sort_index()
+    if not doubles.index.equals(triples.index):
+        raise ValueError("هر فرصت باید دقیقاً برای هر دو هدف دوبرابر و سه‌برابر وجود داشته باشد")
+
+    # A 3x first hit implies that a 2x first hit occurred no later on the same path.
+    triple_hit = triples["status"].eq("hit")
+    if (triple_hit & ~doubles["status"].eq("hit")).any():
+        raise ValueError("رخداد سه‌برابر بدون رخداد دوبرابر در مسیر یکسان ناممکن است")
+    first_double = pd.to_numeric(doubles.loc[triple_hit, "first_hit_session"], errors="coerce")
+    first_triple = pd.to_numeric(triples.loc[triple_hit, "first_hit_session"], errors="coerce")
+    if first_double.isna().any() or first_triple.isna().any() or (first_double > first_triple).any():
+        raise ValueError("ترتیب اولین عبور دوبرابر و سه‌برابر ناسازگار است")
     return summaries
 
 
