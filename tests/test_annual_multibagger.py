@@ -118,6 +118,40 @@ def runner_input(tmp_path, monkeypatch):
     return path
 
 
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["duplicate_key", "normalized_duplicate_key", "missing_raw_column", "blank_symbol"],
+)
+def test_invalid_source_is_refused_before_protocol_registration(db, tmp_path, monkeypatch, corruption):
+    """Invalid dataset structure must not leave an unreplayable experiment in the registry."""
+    path = runner_input(tmp_path, monkeypatch)
+    prices = pd.read_parquet(path)
+    if corruption == "duplicate_key":
+        prices = pd.concat([prices, prices.iloc[[0]]], ignore_index=True)
+    elif corruption == "normalized_duplicate_key":
+        prices.loc[0, "symbol"] = "كيان"
+        variant = prices.iloc[[0]].copy()
+        variant["symbol"] = "کیان"
+        prices = pd.concat([prices, variant], ignore_index=True)
+    elif corruption == "missing_raw_column":
+        prices = prices.drop(columns="ref_price_raw")
+    else:
+        prices.loc[0, "symbol"] = "   "
+    prices.to_parquet(path, index=False)
+
+    monkeypatch.setattr(
+        db,
+        "log_experiment",
+        lambda **kwargs: pytest.fail("invalid source was registered before source validation"),
+    )
+    root = tmp_path / "runs"
+    with pytest.raises(ValueError):
+        run_annual_census(
+            db, prices_path=path, prices_sha256=_sha256(path), root=root, min_symbols=1
+        )
+    assert not root.exists()
+
 def test_study_registers_before_labels_and_reconstructs_from_archived_bytes(db, tmp_path, monkeypatch):
     path = runner_input(tmp_path, monkeypatch)
     result = run_annual_census(
