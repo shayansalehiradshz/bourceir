@@ -68,6 +68,41 @@ def test_summary_rejects_mismatched_target_names():
         summarize_annual_multibagger_labels(result)
 
 
+
+@pytest.mark.parametrize(
+    "corruption,expected",
+    [
+        ("missing_partner", "هر فرصت"),
+        ("impossible_triple", "بدون رخداد دوبرابر"),
+        ("reverse_first_hit", "ترتیب اولین عبور"),
+        ("partial_missing_name", "نام هدف"),
+    ],
+)
+def test_summary_refuses_incomparable_target_cohorts(corruption, expected):
+    days = pd.date_range("2024-01-01", periods=HORIZON_SESSIONS + 1).strftime("%Y-%m-%d").tolist()
+    prices = synthetic_prices(days, final_close=300.0)
+    decisions = prices.iloc[[0, 1]][["symbol", "date"]]
+    rows = compute_annual_multibagger_labels(prices, decisions, days, observed_through=days[-1])
+    first = rows["date"].eq(days[0])
+    second = rows["date"].eq(days[1])
+    is_double = rows["threshold"].eq(2.0)
+    is_triple = rows["threshold"].eq(3.0)
+
+    # A correct result includes both targets for both anchors, regardless of censoring.
+    assert [s["opportunities"] for s in summarize_annual_multibagger_labels(rows)] == [2, 2]
+
+    if corruption == "missing_partner":
+        rows = rows.loc[~(second & is_triple)]
+    elif corruption == "impossible_triple":
+        rows.loc[first & is_double, "status"] = "complete_no_hit"
+    elif corruption == "reverse_first_hit":
+        rows.loc[first & is_triple, "first_hit_session"] = 1.0
+    else:
+        rows.loc[second & is_triple, "target"] = pd.NA
+
+    with pytest.raises(ValueError, match=expected):
+        summarize_annual_multibagger_labels(rows)
+
 def runner_input(tmp_path, monkeypatch):
     monkeypatch.setitem(settings.RESEARCH_CONFIG, "dev_start", "2024-01-01")
     days = pd.date_range("2024-01-01", periods=65).strftime("%Y-%m-%d").tolist()
