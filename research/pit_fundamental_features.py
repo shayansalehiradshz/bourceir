@@ -139,11 +139,14 @@ def asof_verified_monthly_revenue(decisions, disclosures, *, holdout_start):
             output.append(dict(base, status=status, amount_rial=None, source_sha256=None,
                                period_end=None, first_usable_at=None, tracing_no=None))
             continue
-        rank = lambda item: (item[1], item[3], item[2])
+        # Availability is an admission gate, not a revision sequence. A later
+        # correction can become usable before an older filing is verified.
+        # Rank verified vintages by fiscal period and source publication time.
+        rank = lambda item: (item[1], item[2])
         highest = max(map(rank, admitted))
         ties = [item for item in admitted if rank(item) == highest]
         if len(ties) != 1:
-            raise ValueError('Ambiguous same-period, same-availability verified vintage')
+            raise ValueError('Ambiguous same-period, same-publication verified vintage')
         record, period_end, published, available = ties[0]
         # An unverified newer vintage of the same/latest reporting period must not
         # silently disappear while an older verified value is presented as current.
