@@ -249,3 +249,54 @@ def test_review_refuses_rehashed_holdout_outcome_before_reading_values(db, tmp_p
     with pytest.raises(ValueError, match="مهروموم"):
         review_annual_census(db, folder)
     assert inspected_columns == [["date"]]
+
+
+@pytest.mark.parametrize(
+    "double_status,triple_status",
+    [
+        ("complete_no_hit", "missing_observation"),
+        ("missing_observation", "complete_no_hit"),
+        ("missing_observation", "invalid_observation"),
+    ],
+)
+def test_summary_rejects_impossible_paired_path_statuses(double_status, triple_status):
+    days = pd.date_range("2024-01-01", periods=HORIZON_SESSIONS + 1).strftime("%Y-%m-%d").tolist()
+    prices = synthetic_prices(days, final_close=300.0)
+    rows = compute_annual_multibagger_labels(
+        prices, prices.iloc[:1][["symbol", "date"]], days, observed_through=days[-1]
+    )
+    rows.loc[rows.threshold.eq(2.0), "status"] = double_status
+    rows.loc[rows.threshold.eq(3.0), "status"] = triple_status
+    with pytest.raises(ValueError):
+        summarize_annual_multibagger_labels(rows)
+
+
+@pytest.mark.parametrize(
+    "field,change",
+    [
+        ("valid_prefix_sessions", 251),
+        ("path_problem", "missing_observation"),
+        ("endpoint_multiple", 2.5),
+        ("observed_through", "2024-09-01"),
+    ],
+)
+def test_summary_rejects_different_paths_for_the_same_opportunity(field, change):
+    days = pd.date_range("2024-01-01", periods=HORIZON_SESSIONS + 1).strftime("%Y-%m-%d").tolist()
+    prices = synthetic_prices(days, final_close=300.0)
+    rows = compute_annual_multibagger_labels(
+        prices, prices.iloc[:1][["symbol", "date"]], days, observed_through=days[-1]
+    )
+    rows.loc[rows.threshold.eq(3.0), field] = change
+    with pytest.raises(ValueError, match="یک مسیر"):
+        summarize_annual_multibagger_labels(rows)
+
+
+def test_summary_accepts_both_no_hits_on_the_same_complete_path():
+    days = pd.date_range("2024-01-01", periods=HORIZON_SESSIONS + 1).strftime("%Y-%m-%d").tolist()
+    prices = synthetic_prices(days, final_close=100.0)
+    rows = compute_annual_multibagger_labels(
+        prices, prices.iloc[:1][["symbol", "date"]], days, observed_through=days[-1]
+    )
+    summaries = summarize_annual_multibagger_labels(rows)
+    assert [entry["complete_no_hit"] for entry in summaries] == [1, 1]
+    assert [entry["unknown"] for entry in summaries] == [0, 0]
