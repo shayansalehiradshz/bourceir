@@ -47,14 +47,20 @@
 from config import settings
 from research.annual_training import asof_annual_training_labels
 
-def training_view(replayed_verified_outcomes, registered_fold_train_end):
+def training_view(replayed_verified_outcomes, registered_fold_train_end, registered_protocol):
     return asof_annual_training_labels(
         replayed_verified_outcomes,
         train_cutoff=registered_fold_train_end,
         holdout_start=settings.RESEARCH_CONFIG["holdout_start"],
+        calendar=registered_protocol["calendar"],
     )
 ```
 
 خروجی، `symbol`، `date`، `target`، `training_label` (بولی nullable)، `eligible_for_training` و `training_state` دارد؛ هیچ تاریخ عبور آتی، مقدار انتهای مسیر یا برچسب موفقیتِ هنوز بالغ‌نشده در آن نیست. فرصت‌های نارس و داده‌های مجهول حذف نمی‌شوند و مقدار `training_label` آن‌ها `NA` می‌ماند. دو هدف باید دقیقاً جامعه یکسان، انتهای افق سازگار و ترتیب عبور منطقی داشته باشند. هیچ منبع از دوره مهروموم‌شده پذیرفته نیست.
 
 **محدودیت:** این کنترل، زمان بلوغ رویداد را درست می‌کند، اما مجهول‌های غیرتصادفی، هم‌پوشانی نمونه‌ها، پوشش نمادهای تاریخی، تأخیر انتشار داده، هزینه‌ها یا نقدشوندگی را حل نمی‌کند. تابع به مدل یا سیگنال زنده وصل نیست و برتری پیش‌بینی یا سودآوری را اثبات نمی‌کند.
+
+
+### اثبات بلوغ افق از تقویم ثبت‌شده
+
+تاریخ `nominal_end_date` را نمی‌توان صرفاً به دلیل وجود در خروجی، گواه بلوغ ۲۵۲ جلسه دانست: تاریخ کوتاه‌ترِ اشتباه می‌تواند برچسب مثبت و منفی را ماه‌ها زودتر به آموزش وارد کند. ورودی اجباری `calendar` باید **فهرست مرتب و یکتای جلسات محفوظ در `protocol.json` همان مطالعه بازبینی‌شده** باشد؛ نه تقویم امروز، تاریخ‌های نماد منفرد یا داده‌های بعد از مرز مهروموم. تابع برای هر تصمیم، عضویت روز تصمیم و روز انتهای افق در شماره جلسه ۲۵۲ و تطبیق تاریخ اولین عبور با شماره جلسه را مستقل از فیلدهای رویداد کنترل می‌کند. اگر تقویم هنوز ۲۵۲ جلسه آینده را در بر نگیرد، `nominal_end_date` باید نامعلوم بماند و برچسب حتی با رخداد زودهنگام قابل آموزش نیست. جلسه‌های پس از `observed_through` و دوره مهروموم رد می‌شوند. این کنترل برای استفاده از تابع در هر fold الزامی است؛ بدون تقویم ثبت‌شده تابع باید متوقف شود.
