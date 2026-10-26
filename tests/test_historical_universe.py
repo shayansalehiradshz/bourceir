@@ -199,3 +199,17 @@ def test_sealed_evidence_is_rejected_before_reading_status_fields():
     ))
     with pytest.raises(ValueError, match="Sealed-period"):
         run([poisoned])
+
+
+@pytest.mark.parametrize("code", ["9", "9" * 7, "9" * 21, "9" * 30])
+def test_source_native_instrument_id_bounds_match_instrument_history(code):
+    """Instrument-history accepts 1..30 ASCII digits, with first digit nonzero."""
+    result = run([record(instrument_id=code)], decisions=[decision(code=code)])[0]
+    assert result["instrument_id"] == code
+    assert result["status"] == "verified_eligible"
+
+
+@pytest.mark.parametrize("bad_code", ["0", "0" + "9" * 16, "9" * 31, 9, True, "۹" * 17])
+def test_invalid_source_native_instrument_ids_remain_rejected(bad_code):
+    with pytest.raises(ValueError, match="Stable ASCII numeric instrument ID"):
+        run(decisions=[decision(code=bad_code)])
