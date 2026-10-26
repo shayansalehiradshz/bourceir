@@ -44,13 +44,15 @@
 تابع مستقل `research.annual_training.asof_annual_training_labels` صرفاً برچسب آموزشی امن تولید می‌کند. ورودی باید خروجی **بازبینی و بازحساب‌شده** مطالعه باشد؛ این تابع خودش بایت فایل یا اصالت منبع را تأیید نمی‌کند. `train_cutoff` روز آغاز آموزش/پیش‌بینی از پیش تعیین‌شده در تقویم تهران است؛ باید قبل از holdout و حداکثر برابر `observed_through` تصویر توسعه باشد.
 
 ```python
+from config import settings
 from research.annual_training import asof_annual_training_labels
 
-panel = asof_annual_training_labels(
-    verified_outcomes,
-    train_cutoff=registered_fold_train_end,
-    holdout_start=settings.RESEARCH_CONFIG["holdout_start"],
-)
+def training_view(replayed_verified_outcomes, registered_fold_train_end):
+    return asof_annual_training_labels(
+        replayed_verified_outcomes,
+        train_cutoff=registered_fold_train_end,
+        holdout_start=settings.RESEARCH_CONFIG["holdout_start"],
+    )
 ```
 
 خروجی، `symbol`، `date`، `target`، `training_label` (بولی nullable)، `eligible_for_training` و `training_state` دارد؛ هیچ تاریخ عبور آتی، مقدار انتهای مسیر یا برچسب موفقیتِ هنوز بالغ‌نشده در آن نیست. فرصت‌های نارس و داده‌های مجهول حذف نمی‌شوند و مقدار `training_label` آن‌ها `NA` می‌ماند. دو هدف باید دقیقاً جامعه یکسان، انتهای افق سازگار و ترتیب عبور منطقی داشته باشند. هیچ منبع از دوره مهروموم‌شده پذیرفته نیست.
