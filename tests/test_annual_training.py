@@ -194,3 +194,46 @@ def test_early_hits_with_no_full_endpoint_remain_unavailable_for_training():
     assert len(result) == 2
     assert result.training_label.isna().all()
     assert not result.eligible_for_training.any()
+
+
+@pytest.mark.parametrize('corruption', [
+    'double_no_hit_triple_unknown',
+    'triple_no_hit_double_unknown',
+    'unequal_unknown_path_failures',
+])
+def test_shared_price_path_rejects_impossible_paired_statuses(corruption):
+    frame = rows(triple='complete_no_hit')
+    frame['outcome'] = frame['outcome'].astype(object)
+    if corruption == 'double_no_hit_triple_unknown':
+        frame.loc[0, ['status', 'outcome', 'resolved_at']] = ['complete_no_hit', False, END]
+        frame.loc[0, ['first_hit_date', 'first_hit_session']] = [None, float('nan')]
+        frame.loc[1, ['status', 'outcome', 'resolved_at']] = ['missing_observation', None, None]
+    elif corruption == 'triple_no_hit_double_unknown':
+        frame.loc[0, ['status', 'outcome', 'resolved_at']] = ['missing_observation', None, None]
+        frame.loc[0, ['first_hit_date', 'first_hit_session']] = [None, float('nan')]
+    else:
+        frame.loc[0, ['status', 'outcome', 'resolved_at']] = ['missing_observation', None, None]
+        frame.loc[0, ['first_hit_date', 'first_hit_session']] = [None, float('nan')]
+        frame.loc[1, ['status', 'outcome', 'resolved_at']] = ['invalid_observation', None, None]
+    with pytest.raises(ValueError):
+        view(frame, cutoff='2024-12-19')
+
+
+def test_same_unknown_status_on_both_targets_stays_unresolved():
+    frame = rows()
+    frame['outcome'] = frame['outcome'].astype(object)
+    for index in (0, 1):
+        frame.loc[index, ['status', 'outcome', 'resolved_at']] = ['missing_observation', None, None]
+        frame.loc[index, ['first_hit_date', 'first_hit_session']] = [None, float('nan')]
+    result = view(frame, cutoff='2024-12-19')
+    assert result.training_label.isna().all()
+    assert not result.eligible_for_training.any()
+
+
+def test_same_full_path_no_hit_for_both_targets_stays_eligible():
+    frame = rows(triple='complete_no_hit')
+    frame.loc[0, ['status', 'outcome', 'resolved_at']] = ['complete_no_hit', False, END]
+    frame.loc[0, ['first_hit_date', 'first_hit_session']] = [None, float('nan')]
+    result = view(frame, cutoff='2024-12-19')
+    assert result.eligible_for_training.all()
+    assert result.training_label.eq(False).all()
