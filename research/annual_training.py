@@ -66,15 +66,29 @@ def _outcome(value):
     return bool(value)
 
 
-def asof_annual_training_labels(outcomes, *, train_cutoff, holdout_start):
+def _registered_calendar(calendar, holdout_start):
+    """Validate the exact ordered decision-session list archived in the protocol."""
+    if not isinstance(calendar, list) or not calendar:
+        raise ValueError('A nonempty registered market-session list is required')
+    sessions = [_day(value) for value in calendar]
+    if sessions != sorted(set(sessions)) or sessions[-1] >= holdout_start:
+        raise ValueError('Registered sessions must be unique, ordered, and pre-holdout')
+    return sessions, {day: index for index, day in enumerate(sessions)}
+
+
+def asof_annual_training_labels(outcomes, *, train_cutoff, holdout_start, calendar):
     """Expose labels only if their complete horizon ended before the train boundary.
 
     Consume only replay-verified, pre-holdout annual outcomes. A success on the
     first future day is not train-eligible until its *nominal 252-session end*.
-    The cutoff is a Tehran date; same-day endpoints are excluded. Unknown labels
-    retain their rows and never become false. No future-event fields are exposed.
+    The cutoff is a Tehran date; same-day endpoints are excluded. The complete
+    ordered calendar must come from the replay-verified registered study protocol;
+    unverified nominal endpoints or hit-session offsets are rejected. Unknown
+    labels retain their rows and never become false. No future-event fields are
+    exposed.
     """
     train_cutoff, holdout_start = _day(train_cutoff), _day(holdout_start)
+    sessions, positions = _registered_calendar(calendar, holdout_start)
     if train_cutoff >= holdout_start:
         raise ValueError('Training must not enter the sealed holdout period')
     if not isinstance(outcomes, pd.DataFrame) or outcomes.empty:
@@ -94,6 +108,10 @@ def asof_annual_training_labels(outcomes, *, train_cutoff, holdout_start):
         snapshot.add(observed)
         if anchor > observed or observed >= holdout_start:
             raise ValueError('A sealed or inconsistent outcome snapshot is not permitted')
+        if sessions[-1] > observed:
+            raise ValueError('Registered calendar includes sessions beyond the observed snapshot')
+        if anchor not in positions:
+            raise ValueError('Decision anchor is missing from the registered calendar')
         if type(row['horizon_sessions']) is not int and not isinstance(row['horizon_sessions'], np.integer):
             raise ValueError('Horizon must be an integer')
         if row['horizon_sessions'] != HORIZON_SESSIONS:
@@ -115,6 +133,12 @@ def asof_annual_training_labels(outcomes, *, train_cutoff, holdout_start):
         first = _optional_day(row['first_hit_date'])
         end = _optional_day(row['nominal_end_date'])
         hit_session = row['first_hit_session']
+        # An untrusted nominal_end_date can make a 252-session label appear mature
+        # many months too early. Reconstruct it from the registered session index.
+        end_position = positions[anchor] + HORIZON_SESSIONS
+        expected_end = sessions[end_position] if end_position < len(sessions) else None
+        if end != expected_end:
+            raise ValueError('Nominal endpoint is not the registered 252nd future session')
         if status == 'hit':
             if truth is not True or resolved is None or first != resolved:
                 raise ValueError('Hit must have a true outcome and matching first-hit resolution date')
@@ -122,6 +146,9 @@ def asof_annual_training_labels(outcomes, *, train_cutoff, holdout_start):
                     or not np.isfinite(hit_session) or int(hit_session) != hit_session
                     or not 1 <= int(hit_session) <= HORIZON_SESSIONS):
                 raise ValueError('First hit must be a valid future session')
+            hit_position = positions[anchor] + int(hit_session)
+            if hit_position >= len(sessions) or sessions[hit_position] != first:
+                raise ValueError('First hit date must match its registered future session')
             if not anchor < resolved <= observed or end is not None and resolved > end:
                 raise ValueError('First hit must follow the anchor and precede its endpoint')
         elif status == 'complete_no_hit':
