@@ -60,7 +60,7 @@ def test_publication_after_market_close_stays_unknown_until_next_decision():
                      first_usable_at='2024-02-05T13:01:00+03:30')
     before, after = run(decisions=[decision(), decision('2024-02-06', '2024-02-06T12:30:00+03:30')],
                         filings=[row])
-    assert before['status'] == 'not_yet_available' and before['amount_rial'] is None
+    assert before['status'] == 'no_source_observed' and before['amount_rial'] is None
     assert after['status'] == 'verified_as_of' and after['amount_rial'] == '500000000'
 
 
@@ -68,7 +68,7 @@ def test_exact_time_not_admitted_and_timezone_comparisons_are_absolute():
     first = disclosure(published_at='2024-02-05T09:00:00+00:00',
                        first_usable_at='2024-02-05T09:00:00+00:00')
     row = run(filings=[first])[0]
-    assert row['status'] == 'not_yet_available'
+    assert row['status'] == 'no_source_observed'
     first['first_usable_at'] = '2024-02-05T08:59:59+00:00'
     first['published_at'] = '2024-02-05T08:59:00+00:00'
     assert run(filings=[first])[0]['status'] == 'verified_as_of'
@@ -211,3 +211,40 @@ def test_same_period_and_publication_incompatible_vintages_fail_closed():
     )
     with pytest.raises(ValueError, match='Ambiguous'):
         run(filings=[disclosure(), conflicting])
+
+
+@pytest.mark.parametrize('timestamp', [
+    '2024-02-05T12:30:00+03:30',
+    '2024-02-05T13:00:00+03:30',
+    '2024-02-06T10:00:00+03:30',
+])
+def test_future_source_existence_cannot_leak_through_status(timestamp):
+    """The same historical decision cannot reveal a future Codal filing."""
+    future = disclosure(published_at=timestamp,
+                        first_usable_at='2024-02-06T10:01:00+03:30')
+    assert run(filings=[future]) == run(filings=[])
+
+
+def test_multiple_prepublication_decisions_independent_of_later_archive_rows():
+    dates = [decision('2024-02-03', '2024-02-03T12:30:00+03:30'), decision()]
+    future = disclosure(published_at='2024-02-06T10:00:00+03:30',
+                        first_usable_at='2024-02-06T10:01:00+03:30')
+    assert run(decisions=dates, filings=[future]) == run(decisions=dates, filings=[])
+
+
+def test_published_but_not_yet_usable_filing_remains_not_yet_available():
+    past = disclosure(published_at='2024-02-04T18:00:00+03:30',
+                      first_usable_at='2024-02-06T10:01:00+03:30')
+    row = run(filings=[past])[0]
+    assert row['status'] == 'not_yet_available'
+    assert row['amount_rial'] is None
+
+
+def test_source_transition_from_unobserved_to_verified_preserves_point_in_time():
+    future = disclosure(published_at='2024-02-06T10:00:00+03:30',
+                        first_usable_at='2024-02-06T10:01:00+03:30')
+    before, after = run(decisions=[decision(),
+                                   decision('2024-02-07', '2024-02-07T12:30:00+03:30')],
+                        filings=[future])
+    assert before['status'] == 'no_source_observed' and before['amount_rial'] is None
+    assert after['status'] == 'verified_as_of' and after['amount_rial'] == '500000000'
