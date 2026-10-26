@@ -190,6 +190,18 @@ def asof_annual_training_labels(outcomes, *, train_cutoff, holdout_start, calend
             raise ValueError('3x cannot occur before a 2x event')
         if triple[0] == 'hit' and double[1] > triple[1]:
             raise ValueError('2x first hit cannot occur after a 3x first hit')
+        # Both targets run over exactly the same observed price/reference path.
+        # A complete 2x no-hit proves a 3x no-hit; an established 3x no-hit
+        # proves the 2x outcome cannot still be unknown. Unknown path failures
+        # cannot differ while neither threshold has been hit. Without these
+        # checks, individually valid rows can create a fabricated training base rate.
+        if double[0] == 'complete_no_hit' and triple[0] != 'complete_no_hit':
+            raise ValueError('Complete 2x no-hit requires a complete 3x no-hit')
+        if triple[0] == 'complete_no_hit' and double[0] in _UNKNOWN:
+            raise ValueError('Complete 3x no-hit cannot coexist with an unknown 2x path')
+        if (double[0] in _UNKNOWN and triple[0] in _UNKNOWN
+                and double[0] != triple[0]):
+            raise ValueError('Unresolved 2x/3x paths must have the same failure status')
 
     output = pd.DataFrame(records, columns=_COLUMNS)
     output['training_label'] = pd.array(output['training_label'], dtype='boolean')
