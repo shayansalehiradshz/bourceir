@@ -11,7 +11,9 @@ from zoneinfo import ZoneInfo
 
 VERSION = "historical-universe-asof-v1"
 _TEHRAN = ZoneInfo("Asia/Tehran")
-_INSTRUMENT = re.compile(r"[1-9][0-9]{7,19}\Z")
+# Match the native ID contract in core.instrument_history.history_request.
+# String-only here preserves exact IDs; shape does not establish historical identity.
+_INSTRUMENT = re.compile(r"[1-9][0-9]{0,29}\Z")
 _SHA256 = re.compile(r"[a-f0-9]{64}\Z")
 _TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:Z|[+-][0-9]{2}:[0-9]{2})\Z")
 _PROOFS = (
