@@ -12,10 +12,11 @@ from config import settings
 from core.timeutils import now_tehran_iso
 from ops.research_review import _load_json, _relative_file, _verify_inventory, read_development_parquet
 from research.labels import CALENDAR_MIN_SYMBOLS, market_calendar
+from research.annual_cohort import VERSION as COHORT_VERSION, first_observed_cohort
 from research.rare_events import _panel, compute_rare_events, summarize_rare_events
 from research.run import _json_safe, _sha256, archive_research_code, research_code_fingerprint
 
-VERSION = "annual-multibagger-cohort-v1"
+VERSION = "annual-multibagger-cohort-v2"
 HORIZON_SESSIONS = 252
 TARGETS = (2.0, 3.0)
 TARGET_NAMES = {2.0: "double", 3.0: "triple"}
@@ -31,14 +32,18 @@ def _inputs(path, digest, cutoff, start, min_symbols, stride):
     # duplicated normalized symbol/date or missing raw column must not leave behind
     # a registered experiment whose outcomes can never be reconstructed.
     # Do not filter invalid numeric bars here: their event paths remain unknown.
-    _panel(prices, {"symbol", "date", "close_final_raw", "ref_price_raw", "volume"})
+    normalized_prices = _panel(prices, {"symbol", "date", "close_final_raw", "ref_price_raw", "volume"})
     if prices.empty or prices.date.min() > start:
         raise ValueError("سابقه خام باید شروع دوره توسعه را پوشش دهد")
     calendar = market_calendar(prices, min_symbols=min_symbols).tolist()
     dates = [day for day in calendar if day >= start][::stride]
     if not dates:
         raise ValueError("هیچ روز تصمیمی در تقویم داده نیست")
-    decisions = prices.loc[prices.date.isin(dates), ["symbol", "date"]].copy()
+    # Do not select only symbols with a bar on each anchor. A previously seen
+    # instrument missing its anchor-day price must stay in the denominator as
+    # missing_anchor/unknown, rather than disappearing from the sample.
+    # First-observation eligibility never uses a future first listing.
+    decisions = first_observed_cohort(normalized_prices, dates)
     return prices, calendar, decisions
 
 
@@ -131,7 +136,7 @@ def _register(db, identifier, protocol, metrics):
     result = db.log_experiment(
         experiment_id=identifier,
         strategy_name=VERSION,
-        symbols_tested="all observed symbols on predetermined development anchor dates; membership unverified",
+        symbols_tested="every symbol first observed by each fixed development anchor; historical active membership unverified",
         parameters_json=json.dumps(_json_safe(protocol), ensure_ascii=False, allow_nan=False),
         metrics_json=json.dumps(_json_safe(metrics), ensure_ascii=False, allow_nan=False),
         start_date=protocol["development_start"],
@@ -180,6 +185,7 @@ def run_annual_census(
         source_code=archive_research_code(folder / "code"),
         code_sha256=research_code_fingerprint(),
         anchor_stride=anchor_stride,
+        cohort_version=COHORT_VERSION,
         calendar_min_symbols=min_symbols,
         horizon_sessions=HORIZON_SESSIONS,
         target_thresholds=list(TARGETS),
@@ -187,7 +193,7 @@ def run_annual_census(
         calendar=calendar,
         source_rows=len(prices),
         opportunities=len(decisions),
-        cohort="all observed symbols on every fixed nth inferred market session from development start; no future-return selection",
+        cohort="all symbols first observed by or before each fixed nth inferred market session; missing anchor kept unknown; later delistings/membership unverified",
         event="first official-close/reference synthetic index crossing of 2x or 3x within 252 future sessions after decision close",
         endpoint="separate synthetic index at exact 252-session endpoint; no intraday-high or delayed-exit substitution",
         unknowns="missing, invalid, off-calendar and right-censored paths remain unknown unless a first hit was already established",
@@ -248,6 +254,8 @@ def review_annual_census(db, folder):
         raise ValueError("ادعای پذیرش یا پیش‌بینی با قرارداد توصیفی ناسازگار است")
     if protocol["horizon_sessions"] != HORIZON_SESSIONS or protocol["target_thresholds"] != list(TARGETS):
         raise ValueError("اهداف ثابت مطالعه تغییر کرده‌اند")
+    if protocol.get("cohort_version") != COHORT_VERSION:
+        raise ValueError("نسخه ساخت جامعه پیش از تصمیم با کد پژوهش ناسازگار است")
     expected_names = {str(key): value for key, value in TARGET_NAMES.items()}
     if protocol.get("target_names") != expected_names:
         raise ValueError("نام‌گذاری اهداف تغییر کرده است")
