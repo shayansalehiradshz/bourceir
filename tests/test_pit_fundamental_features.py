@@ -248,3 +248,60 @@ def test_source_transition_from_unobserved_to_verified_preserves_point_in_time()
                         filings=[future])
     assert before['status'] == 'no_source_observed' and before['amount_rial'] is None
     assert after['status'] == 'verified_as_of' and after['amount_rial'] == '500000000'
+
+
+@pytest.mark.parametrize('reverse_sources', [False, True])
+def test_published_but_not_yet_usable_correction_masks_stale_verified_revenue(reverse_sources):
+    """Known pre-decision publication cannot be ignored merely because availability is later."""
+    old = disclosure()
+    correction = disclosure(
+        tracing_no='67890', source_sha256=SHA2, amount_rial='700000000',
+        published_at='2024-02-05T10:00:00+03:30',
+        first_usable_at='2024-02-05T15:00:00+03:30',
+    )
+    sources = [old, correction]
+    if reverse_sources:
+        sources.reverse()
+    before, after = run(
+        decisions=[decision(), decision('2024-02-06', '2024-02-06T12:30:00+03:30')],
+        filings=sources,
+    )
+    assert before['status'] == 'newer_vintage_unverified'
+    assert before['amount_rial'] is None and before['source_sha256'] is None
+    assert after['status'] == 'verified_as_of'
+    assert after['source_sha256'] == SHA2 and after['amount_rial'] == '700000000'
+
+
+def test_published_new_period_pending_availability_masks_previous_period():
+    latest_period = disclosure(
+        period_end='2024-02-04', tracing_no='67890', source_sha256=SHA2,
+        published_at='2024-02-05T10:00:00+03:30',
+        first_usable_at='2024-02-05T15:00:00+03:30',
+    )
+    row = run(filings=[disclosure(), latest_period])[0]
+    assert row['status'] == 'newer_vintage_unverified'
+    assert row['amount_rial'] is None
+
+
+def test_same_publication_time_unverified_competitor_masks_verification():
+    competitor = disclosure(
+        tracing_no='67890', source_sha256=SHA2,
+        value_verified=False, amount_rial=None,
+        first_usable_at=None, historical_availability_verified=False,
+    )
+    row = run(filings=[disclosure(), competitor])[0]
+    assert row['status'] == 'newer_vintage_unverified'
+    assert row['amount_rial'] is None
+
+
+def test_correction_published_exactly_at_decision_is_not_observable():
+    """A future/equal-time filing cannot retroactively suppress the old as-of value."""
+    later = disclosure(
+        tracing_no='67890', source_sha256=SHA2, amount_rial='700000000',
+        published_at='2024-02-05T12:30:00+03:30',
+        first_usable_at='2024-02-05T12:31:00+03:30',
+    )
+    row = run(filings=[disclosure(), later])[0]
+    assert row['status'] == 'verified_as_of'
+    assert row['source_sha256'] == SHA1
+    assert row['amount_rial'] == '500000000'
