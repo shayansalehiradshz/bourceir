@@ -172,3 +172,30 @@ def test_mismatched_tehran_date_and_sealed_decision_rejected():
         run(decisions=[decision(day="2024-02-06")])
     with pytest.raises(ValueError):
         run(decisions=[decision(day=HOLDOUT, at="2025-03-21T12:30:00+03:30")])
+
+
+@pytest.mark.parametrize("published_at,first_usable_at", [
+    ("2025-03-21T00:00:00+03:30", "2025-03-21T00:01:00+03:30"),
+    ("2024-02-05T11:00:00+03:30", "2025-03-21T00:01:00+03:30"),
+    ("2025-03-20T21:00:00Z", "2025-03-20T21:01:00Z"),
+])
+def test_sealed_publication_or_availability_rejected_even_for_preholdout_effective_date(
+    published_at, first_usable_at,
+):
+    with pytest.raises(ValueError, match="Sealed-period"):
+        run([record(published_at=published_at, first_usable_at=first_usable_at)])
+
+
+def test_sealed_evidence_is_rejected_before_reading_status_fields():
+    class ProtectedEvidence(dict):
+        def __getitem__(self, key):
+            if key in {"instrument_type_code", "listed", "trading_at_decision"}:
+                pytest.fail("Sealed status was accessed before the cutoff check")
+            return super().__getitem__(key)
+
+    poisoned = ProtectedEvidence(record(
+        published_at="2025-03-21T00:00:00+03:30",
+        first_usable_at="2025-03-21T00:00:01+03:30",
+    ))
+    with pytest.raises(ValueError, match="Sealed-period"):
+        run([poisoned])
