@@ -102,6 +102,28 @@ def summarize_annual_multibagger_labels(outcomes):
     first_triple = pd.to_numeric(triples.loc[triple_hit, "first_hit_session"], errors="coerce")
     if first_double.isna().any() or first_triple.isna().any() or (first_double > first_triple).any():
         raise ValueError("ترتیب اولین عبور دوبرابر و سه‌برابر ناسازگار است")
+
+    # A 2x and a 3x label must describe the SAME reference-price path. Targets
+    # change only the threshold, never the observation coverage, calendar or
+    # endpoint multiple. Mismatches can silently distort training base rates.
+    shared_path = (
+        "observed_through", "nominal_end_date", "valid_prefix_sessions",
+        "prefix_reference_changes", "path_problem", "path_problem_date",
+        "endpoint_multiple",
+    )
+    if (doubles["status"].isna().any() or triples["status"].isna().any()
+            or any(not doubles[field].equals(triples[field]) for field in shared_path)):
+        raise ValueError("دو هدف باید دقیقاً از یک مسیر قیمت و یک تصویر مشاهده باشند")
+    double_hit = doubles["status"].eq("hit")
+    double_no_hit = doubles["status"].eq("complete_no_hit")
+    triple_no_hit = triples["status"].eq("complete_no_hit")
+    if (double_no_hit & ~triple_no_hit).any():
+        raise ValueError("عدم رخداد قطعی دوبرابر به معنای عدم رخداد قطعی سه‌برابر است")
+    if (triple_no_hit & ~(double_hit | double_no_hit)).any():
+        raise ValueError("عدم رخداد قطعی سه‌برابر با مسیر نامعلوم دوبرابر ناسازگار است")
+    both_unknown = ~(double_hit | double_no_hit) & ~(triple_hit | triple_no_hit)
+    if doubles.loc[both_unknown, "status"].ne(triples.loc[both_unknown, "status"]).any():
+        raise ValueError("علت نامعلوم بودن دو هدف روی یک مسیر باید یکسان باشد")
     return summaries
 
 
