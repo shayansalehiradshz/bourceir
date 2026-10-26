@@ -174,3 +174,40 @@ def test_newer_unverified_revision_does_not_hide_behind_old_verified_revenue():
 def test_other_report_types_units_and_consolidation_cannot_be_mislabelled_as_monthly_revenue(field, value):
     with pytest.raises(ValueError, match='standalone monthly'):
         run(filings=[disclosure(**{field: value})])
+
+
+@pytest.mark.parametrize('reverse_sources', [False, True])
+def test_latest_published_revision_cannot_be_replaced_by_older_late_usable_source(reverse_sources):
+    """Availability gates admission; it must not rank competing admitted revisions."""
+    original = disclosure(
+        published_at='2024-02-03T10:00:00+03:30',
+        first_usable_at='2024-02-07T10:00:00+03:30',
+    )
+    correction = disclosure(
+        tracing_no='67890', source_sha256=SHA2, amount_rial='700000000',
+        published_at='2024-02-06T10:00:00+03:30',
+        first_usable_at='2024-02-06T10:01:00+03:30',
+    )
+    records = [original, correction]
+    if reverse_sources:
+        records.reverse()
+    before_delayed_availability, after_delayed_availability = run(
+        decisions=[decision('2024-02-06', '2024-02-06T12:30:00+03:30'),
+                   decision('2024-02-08', '2024-02-08T12:30:00+03:30')],
+        filings=records,
+    )
+    assert before_delayed_availability['source_sha256'] == SHA2
+    assert after_delayed_availability['status'] == 'verified_as_of'
+    assert after_delayed_availability['source_sha256'] == SHA2
+    assert after_delayed_availability['amount_rial'] == '700000000'
+
+
+
+def test_same_period_and_publication_incompatible_vintages_fail_closed():
+    """First-usable timestamps cannot break a same-publication source conflict."""
+    conflicting = disclosure(
+        tracing_no='67890', source_sha256=SHA2, amount_rial='700000000',
+        first_usable_at='2024-02-05T10:00:00+03:30',
+    )
+    with pytest.raises(ValueError, match='Ambiguous'):
+        run(filings=[disclosure(), conflicting])
