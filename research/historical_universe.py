@@ -70,6 +70,12 @@ def _validate_evidence(row, cutoff):
     code = _instrument(row["instrument_id"])
     published = _stamp(row["published_at"])
     usable = None if row["first_usable_at"] is None else _stamp(row["first_usable_at"])
+    # A pre-holdout effective date does NOT make a document published or first
+    # usable in the sealed period permissible development evidence. Check both
+    # clocks in Tehran local time before accessing market-status fields.
+    if (published.astimezone(_TEHRAN).date().isoformat() >= cutoff
+            or usable is not None and usable.astimezone(_TEHRAN).date().isoformat() >= cutoff):
+        raise ValueError("Sealed-period publication or usability cannot enter development research")
     if usable is not None and usable < published:
         raise ValueError("Evidence cannot be usable before its publication")
     if type(row["source_record_id"]) is not str or not row["source_record_id"].strip():
