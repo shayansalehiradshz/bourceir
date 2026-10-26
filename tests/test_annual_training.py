@@ -6,22 +6,30 @@ import pytest
 from research.annual_training import asof_annual_training_labels
 
 
+# Synthetic weekday sessions: Jan 1 is session zero, Jan 15 session ten,
+# and Dec 18 is precisely session 252. No exchange holiday claim.
+CALENDAR = pd.bdate_range('2024-01-01', '2024-12-31').strftime('%Y-%m-%d').tolist()
+END = CALENDAR[252]
+
+
 def rows(*, triple='hit', triple_at='2024-01-15', observed='2024-12-31'):
     root = dict(symbol='آزمون', date='2024-01-01', horizon_sessions=252,
-                nominal_end_date='2024-12-01', observed_through=observed)
+                nominal_end_date=END, observed_through=observed)
     return pd.DataFrame([
         dict(root, target='double', threshold=2.0, status='hit', outcome=True,
              resolved_at='2024-01-03', first_hit_date='2024-01-03', first_hit_session=2.0),
         dict(root, target='triple', threshold=3.0, status=triple,
              outcome=True if triple == 'hit' else False,
-             resolved_at=triple_at if triple == 'hit' else '2024-12-01',
+             resolved_at=triple_at if triple == 'hit' else END,
              first_hit_date=triple_at if triple == 'hit' else None,
              first_hit_session=10.0 if triple == 'hit' else float('nan')),
     ])
 
 
-def view(outcomes, cutoff='2024-01-10', holdout='2025-03-21'):
-    return asof_annual_training_labels(outcomes, train_cutoff=cutoff, holdout_start=holdout)
+def view(outcomes, cutoff='2024-01-10', holdout='2025-03-21', calendar=CALENDAR):
+    return asof_annual_training_labels(
+        outcomes, train_cutoff=cutoff, holdout_start=holdout, calendar=calendar
+    )
 
 
 def test_early_double_hit_is_not_allowed_to_train_before_full_horizon():
@@ -46,9 +54,9 @@ def test_label_resolving_on_cutoff_day_is_not_ready():
 
 
 def test_both_early_hit_and_no_hit_only_train_after_exact_horizon_endpoint():
-    on_endpoint = view(rows(triple='complete_no_hit'), cutoff='2024-12-01').set_index('target')
+    on_endpoint = view(rows(triple='complete_no_hit'), cutoff=END).set_index('target')
     assert on_endpoint.training_label.isna().all()
-    after_endpoint = view(rows(triple='complete_no_hit'), cutoff='2024-12-02').set_index('target')
+    after_endpoint = view(rows(triple='complete_no_hit'), cutoff='2024-12-19').set_index('target')
     assert after_endpoint.loc['double', 'training_label'] == True
     assert after_endpoint.loc['double', 'training_state'] == 'resolved_hit'
     assert after_endpoint.loc['triple', 'training_label'] == False
@@ -71,6 +79,7 @@ def test_original_unknown_is_preserved_not_declared_loss():
 def test_future_anchor_cannot_enter_training_even_when_it_is_in_snapshot():
     frame = rows()
     frame['date'] = '2024-02-01'
+    frame['nominal_end_date'] = None  # fewer than 252 future sessions in this snapshot
     frame['resolved_at'] = ['2024-02-05', '2024-02-15']
     frame['first_hit_date'] = frame['resolved_at']
     assert view(frame).empty
@@ -134,3 +143,54 @@ def test_rejects_outcome_columns_with_duplicate_names():
     frame.columns = frame.columns[:-1].tolist() + [frame.columns[-2]]
     with pytest.raises(ValueError):
         view(frame)
+
+
+def test_fake_short_endpoint_cannot_early_mature_both_labels():
+    frame = rows(triple='complete_no_hit')
+    frame['nominal_end_date'] = '2024-01-20'
+    frame.loc[frame.target.eq('triple'), 'resolved_at'] = '2024-01-20'
+    # Without independent session-index verification, this returns two apparently
+    # mature labels in February instead of waiting until the true December endpoint.
+    with pytest.raises(ValueError, match='252nd future session'):
+        view(frame, cutoff='2024-02-01')
+
+
+def test_wrong_hit_session_date_is_rejected_even_if_hit_and_resolution_match():
+    frame = rows()
+    frame.loc[0, 'first_hit_date'] = '2024-01-04'
+    frame.loc[0, 'resolved_at'] = '2024-01-04'
+    with pytest.raises(ValueError, match='First hit date'):
+        view(frame)
+
+
+def test_off_calendar_decision_anchor_is_rejected():
+    frame = rows()
+    frame['date'] = '2024-01-06'  # Saturday in the synthetic weekday calendar
+    with pytest.raises(ValueError, match='Decision anchor'):
+        view(frame)
+
+
+@pytest.mark.parametrize('calendar', [
+    CALENDAR[::-1],
+    CALENDAR[:-1] + CALENDAR[-2:],
+    CALENDAR + ['2025-03-21'],
+])
+def test_invalid_registered_calendar_rejected(calendar):
+    with pytest.raises(ValueError, match='Registered sessions'):
+        view(rows(), calendar=calendar)
+
+
+def test_registered_calendar_must_not_extend_beyond_observation():
+    frame = rows(observed='2024-12-19')
+    with pytest.raises(ValueError, match='beyond the observed snapshot'):
+        view(frame)
+
+
+def test_early_hits_with_no_full_endpoint_remain_unavailable_for_training():
+    frame = rows()
+    frame['nominal_end_date'] = None
+    truncated = CALENDAR[:240]
+    result = view(frame, cutoff='2024-11-29', calendar=truncated)
+    assert len(result) == 2
+    assert result.training_label.isna().all()
+    assert not result.eligible_for_training.any()
