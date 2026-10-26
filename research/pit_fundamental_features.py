@@ -127,15 +127,19 @@ def asof_verified_monthly_revenue(decisions, disclosures, *, holdout_start):
     output = []
     for instrument, session, instant in checked_decisions:
         evidence = by_instrument[instrument]
-        historical = [item for item in evidence if item[1] <= session and item[2] < instant
-                      and (item[3] is None or item[3] < instant)]
+        # A report published after the decision must be indistinguishable from
+        # no report at all. Even a nullable status can leak future coverage to
+        # a model, so never base status on the full later-known source archive.
+        published_asof = [item for item in evidence if item[1] <= session and item[2] < instant]
+        historical = [item for item in published_asof
+                      if item[3] is None or item[3] < instant]
         admitted = [item for item in historical if item[3] is not None
                     and all(item[0][flag] is True for flag in _REQUIRED_EVIDENCE)]
         base = dict(instrument_id=instrument, date=session.isoformat(), decision_at=instant.isoformat(),
                     version=VERSION, accepted_for_signals=False, probability_calibrated=False)
         if not admitted:
             status = ('historical_evidence_unverified' if historical else
-                      'not_yet_available' if evidence else 'no_source_observed')
+                      'not_yet_available' if published_asof else 'no_source_observed')
             output.append(dict(base, status=status, amount_rial=None, source_sha256=None,
                                period_end=None, first_usable_at=None, tracing_no=None))
             continue
