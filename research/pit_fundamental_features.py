@@ -152,12 +152,18 @@ def asof_verified_monthly_revenue(decisions, disclosures, *, holdout_start):
         if len(ties) != 1:
             raise ValueError('Ambiguous same-period, same-publication verified vintage')
         record, period_end, published, available = ties[0]
-        # An unverified newer vintage of the same/latest reporting period must not
-        # silently disappear while an older verified value is presented as current.
+        # A published newer (or same-time competing) filing can invalidate an older
+        # selection even when the newer filing is not yet verified/usable. Comparing
+        # only eligible or already-usable filings would silently present stale
+        # revenue while a competing pre-decision disclosure is already known.
+        # Post-decision publications remain invisible to the entire as-of view.
         conflicting = any(
-            (item[1] > period_end or item[1] == period_end and item[2] > published)
-            and not (item[3] is not None and all(item[0][flag] is True for flag in _REQUIRED_EVIDENCE))
-            for item in historical
+            item[1] > period_end or (
+                item[1] == period_end and (
+                    item[2] > published or item[2] == published and item[0] is not record
+                )
+            )
+            for item in published_asof
         )
         if conflicting:
             output.append(dict(base, status='newer_vintage_unverified', amount_rial=None,
