@@ -152,6 +152,38 @@ def test_invalid_source_is_refused_before_protocol_registration(db, tmp_path, mo
         )
     assert not root.exists()
 
+def test_registered_cohort_retains_missing_anchor_after_first_observation(db, tmp_path, monkeypatch):
+    """An unobserved decision-day bar cannot erase a previously seen instrument."""
+    path = runner_input(tmp_path, monkeypatch)
+    prices = pd.read_parquet(path)
+    control = prices.copy()
+    control["symbol"] = "کنترل"
+    missing_anchor = "2024-01-21"  # the second fixed 20-session decision
+    prices = pd.concat([prices, control], ignore_index=True)
+    prices = prices.loc[
+        ~((prices.symbol == "آزمون") & (prices.date == missing_anchor))
+    ].reset_index(drop=True)
+    prices.to_parquet(path, index=False)
+
+    result = run_annual_census(
+        db, prices_path=path, prices_sha256=_sha256(path), root=tmp_path / "runs", min_symbols=1
+    )
+    folder = tmp_path / "runs" / result["experiment_id"]
+    cohort = pd.read_parquet(folder / "cohort.parquet")
+    outcomes = pd.read_parquet(folder / "outcomes.parquet")
+    missing = outcomes.loc[
+        outcomes.symbol.eq("آزمون") & outcomes.date.eq(missing_anchor)
+    ]
+
+    assert result["protocol"]["cohort_version"] == "first-observed-anchor-cohort-v1"
+    assert len(cohort) == 8  # two previously observed symbols across four anchors
+    assert len(missing) == 2
+    assert missing.status.eq("missing_anchor").all()
+    assert missing.outcome.isna().all()
+    assert [row["opportunities"] for row in result["summary"]] == [8, 8]
+    assert review_annual_census(db, folder)["cohort_reconstructed"] == 8
+
+
 def test_study_registers_before_labels_and_reconstructs_from_archived_bytes(db, tmp_path, monkeypatch):
     path = runner_input(tmp_path, monkeypatch)
     result = run_annual_census(
