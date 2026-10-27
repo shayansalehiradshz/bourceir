@@ -12,7 +12,9 @@ from zoneinfo import ZoneInfo
 VERSION = 'pit-fundamental-availability-v1'
 _TEHRAN = ZoneInfo('Asia/Tehran')
 _SHA256 = re.compile(r'[0-9a-f]{64}\Z')
-_INSTRUMENT = re.compile(r'[0-9]{8,20}\Z')
+# Align source-native IDs with core.instrument_history.history_request and
+# research.historical_universe; preserving the ASCII string is essential for joins.
+_INSTRUMENT = re.compile(r'[1-9][0-9]{0,29}\Z')
 _AMOUNT = re.compile(r'(?:0|[1-9][0-9]{0,23})\Z')
 _TIME = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:Z|[+-][0-9]{2}:[0-9]{2})\Z')
 _REQUIRED_EVIDENCE = ('identity_verified', 'value_verified', 'historical_availability_verified',
