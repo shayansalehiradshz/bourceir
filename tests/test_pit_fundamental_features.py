@@ -305,3 +305,28 @@ def test_correction_published_exactly_at_decision_is_not_observable():
     assert row['status'] == 'verified_as_of'
     assert row['source_sha256'] == SHA1
     assert row['amount_rial'] == '500000000'
+
+
+
+
+@pytest.mark.parametrize('code', ['9', '9' * 7, '9' * 21, '9' * 30])
+def test_source_native_identifier_lengths_match_instrument_history(code):
+    """A canonical source ID must not be excluded by the feature eligibility gate."""
+    selected = run(
+        decisions=[dict(decision(), instrument_id=code)],
+        filings=[disclosure(instrument_id=code)],
+    )[0]
+    assert selected['instrument_id'] == code
+    assert selected['status'] == 'verified_as_of'
+    assert selected['amount_rial'] == '500000000'
+    assert selected['accepted_for_signals'] is False
+
+
+@pytest.mark.parametrize('bad_code', ['0', '0' + '9' * 16, '9' * 31, 9, True, '۹' * 17])
+def test_noncanonical_instrument_ids_never_create_historical_features(bad_code):
+    """Reject zero, leading zeros, oversized, numeric and non-ASCII IDs."""
+    with pytest.raises(ValueError, match='Stable numeric instrument ID'):
+        run(
+            decisions=[dict(decision(), instrument_id=bad_code)],
+            filings=[disclosure(instrument_id=bad_code)],
+        )
